@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>اختبار قراءة البطاقة — Google Vision</title>
+<style>
+  :root{
+    --bg:#0f1420; --bg2:#161d2e; --bg3:#1e2740; --br:#2a3454;
+    --tx:#e8ecf6; --tx2:#aab2cc; --tx3:#6b7593;
+    --ac:#3d6ef5; --gn:#22c55e; --or:#f0a020; --re:#ef4444;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);font-family:'Segoe UI',Tahoma,Arial,sans-serif;min-height:100vh;padding:24px}
+  .wrap{max-width:760px;margin:0 auto}
+  h1{font-size:19px;margin:0 0 4px}
+  .sub{color:var(--tx3);font-size:12.5px;margin:0 0 22px;line-height:1.6}
+  .card{background:var(--bg2);border:1px solid var(--br);border-radius:12px;padding:18px;margin-bottom:16px}
+  .drop{border:2px dashed var(--br);border-radius:10px;padding:34px 16px;text-align:center;cursor:pointer;transition:.15s;color:var(--tx3)}
+  .drop:hover,.drop.over{border-color:var(--ac);background:rgba(61,110,245,.06);color:var(--tx2)}
+  .drop b{color:var(--tx)}
+  #preview{max-width:100%;max-height:220px;border-radius:8px;margin-top:12px;display:none}
+  input[type=file]{display:none}
+  .btn{background:var(--ac);color:#fff;border:none;border-radius:8px;padding:10px 18px;font-size:13px;font-weight:700;cursor:pointer;width:100%;margin-top:12px}
+  .btn:disabled{background:var(--bg3);color:var(--tx3);cursor:not-allowed}
+  .status{font-size:12px;color:var(--ac);margin-top:10px;display:none}
+
+  label{display:block;font-size:10.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px}
+  .fld{margin-bottom:12px}
+  .fld input{width:100%;background:var(--bg3);border:1px solid var(--br);color:var(--tx);border-radius:7px;padding:9px 10px;font-size:13.5px;font-family:inherit}
+  .fld input:focus{outline:none;border-color:var(--ac)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+
+  details{margin-top:4px}
+  summary{cursor:pointer;color:var(--tx3);font-size:12px}
+  pre{white-space:pre-wrap;word-break:break-word;background:var(--bg3);border-radius:8px;padding:12px;font-size:11.5px;color:var(--tx2);max-height:220px;overflow:auto;margin-top:8px;direction:rtl;text-align:right}
+  .note{font-size:11.5px;color:var(--tx3);line-height:1.6;margin-top:14px}
+  .err{color:var(--re);font-size:12.5px;margin-top:10px;display:none;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);border-radius:8px;padding:10px 12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1> اختبار قراءة بيانات البطاقة — Google Vision</h1>
+  <p class="sub">نفس فكرة الأداة الأولى، بس دلوقتي بتستخدم Google Cloud Vision بدل Tesseract — المفروض تكون الدقة أعلى بكتير خصوصًا مع الخط المصري.</p>
+
+  <div class="card">
+    <div class="drop" id="drop" onclick="document.getElementById('file').click()">
+      <div id="dropLabel"> اضغط هنا أو اسحب صورة البطاقة (الوش الأمامي)</div>
+      <img id="preview">
+    </div>
+    <input type="file" id="file" accept="image/*">
+    <button class="btn" id="runBtn" disabled onclick="runOCR()"> اقرأ البطاقة</button>
+    <div class="status" id="status">جاري القراءة...</div>
+    <div class="err" id="errBox"></div>
+  </div>
+
+  <div class="card" id="resultsCard" style="display:none">
+    <div style="font-size:13px;font-weight:700;margin-bottom:14px"> البيانات المستخرجة (راجعها وعدّل أي غلط)</div>
+    <div class="fld">
+      <label>الاسم</label>
+      <input id="fName" placeholder="لم يتم التعرف عليه">
+    </div>
+    <div class="fld">
+      <label>الرقم القومي</label>
+      <input id="fNid" placeholder="لم يتم التعرف عليه" dir="ltr">
+    </div>
+    <div class="grid2">
+      <div class="fld">
+        <label>تاريخ الميلاد</label>
+        <input id="fDob" placeholder="—" dir="ltr">
+      </div>
+      <div class="fld">
+        <label>محافظة الإصدار</label>
+        <input id="fGov" placeholder="—">
+      </div>
+    </div>
+    <div class="fld">
+      <label>العنوان</label>
+      <input id="fAddr" placeholder="لم يتم التعرف عليه">
+    </div>
+
+    <details>
+      <summary>عرض النص الخام اللي قرأه المحرك</summary>
+      <pre id="rawText"></pre>
+    </details>
+  </div>
+
+  <p class="note">
+     أداة اختبار — الصورة بتتبعت مباشرة لـ Google Vision API من متصفحك، مفيش أي سيرفر وسيط. المفتاح المستخدم هنا مقيّد بدومين معيّن فقط.
+  </p>
+</div>
+
+<script>
+// ⚠️ Restricted by HTTP referrer in Google Cloud — only works when this
+// page is served from the allowed domain, not from a local file or any
+// other site.
+const GOOGLE_VISION_API_KEY = 'AIzaSyD62-5b8yRxTtnBpsxaAwSpBb_eiq3baLQ';
+
+let selectedFile = null;
+
+const fileInput = document.getElementById('file');
+const drop = document.getElementById('drop');
+const preview = document.getElementById('preview');
+const dropLabel = document.getElementById('dropLabel');
+const runBtn = document.getElementById('runBtn');
+const statusEl = document.getElementById('status');
+const errBox = document.getElementById('errBox');
+
+fileInput.addEventListener('change', e => handleFile(e.target.files[0]));
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+drop.addEventListener('drop', e => {
+  e.preventDefault();
+  drop.classList.remove('over');
+  if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+});
+
+function handleFile(file) {
+  if (!file) return;
+  selectedFile = file;
+  const url = URL.createObjectURL(file);
+  preview.src = url;
+  preview.style.display = 'block';
+  dropLabel.textContent = file.name;
+  runBtn.disabled = false;
+  errBox.style.display = 'none';
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function runOCR() {
+  if (!selectedFile) return;
+  runBtn.disabled = true;
+  statusEl.style.display = 'block';
+  statusEl.textContent = 'جاري تجهيز الصورة...';
+  errBox.style.display = 'none';
+
+  try {
+    const base64 = await fileToBase64(selectedFile);
+    statusEl.textContent = 'جاري إرسال الصورة لـ Google Vision...';
+
+    const resp = await fetch(
+      `https://vision.googleapis.com/v1/images:annotate?key=${GOOGLE_VISION_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          requests: [{
+            image: { content: base64 },
+            features: [{ type: 'TEXT_DETECTION' }],
+            imageContext: { languageHints: ['ar', 'en'] }
+          }]
+        })
+      }
+    );
+
+    const data = await resp.json();
+
+    if (data.error) {
+      throw new Error(data.error.message || 'حصل خطأ من Google Vision');
+    }
+
+    const annotation = data.responses?.[0]?.fullTextAnnotation;
+    const text = annotation?.text || '';
+
+    if (!text) {
+      throw new Error('مفيش نص اتقرأ من الصورة — جرّب صورة أوضح');
+    }
+
+    document.getElementById('rawText').textContent = text;
+    parseAndFill(text);
+    document.getElementById('resultsCard').style.display = 'block';
+    statusEl.textContent = ' خلصت القراءة';
+  } catch (err) {
+    errBox.textContent = ' ' + err.message;
+    errBox.style.display = 'block';
+    statusEl.style.display = 'none';
+  } finally {
+    runBtn.disabled = false;
+  }
+}
+
+// ── Egyptian-ID field guessing from Google Vision's raw text ──
+function parseAndFill(text) {
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+
+  // National ID: exactly 14 digits in a row
+  let nid = '';
+  const nidMatch = text.match(/\d[\d\s]{15,20}\d/);
+  if (nidMatch) {
+    const digitsOnly = nidMatch[0].replace(/\s/g, '');
+    if (digitsOnly.length === 14) nid = digitsOnly;
+  }
+  if (!nid) {
+    const joined = lines.filter(l => /^\d[\d\s]*\d$/.test(l)).join('');
+    const cleaned = joined.replace(/\s/g, '');
+    if (cleaned.length >= 14) nid = cleaned.slice(0, 14);
+  }
+
+  // Date of birth from digits 2-7 of the National ID (YYMMDD)
+  let dob = '';
+  if (nid && nid.length === 14) {
+    const century = nid[0] === '3' ? '20' : '19';
+    const yy = nid.slice(1, 3), mm = nid.slice(3, 5), dd = nid.slice(5, 7);
+    if (mm >= '01' && mm <= '12' && dd >= '01' && dd <= '31') {
+      dob = dd + '/' + mm + '/' + century + yy;
+    }
+  }
+
+  // Name: the longest Arabic-script line that isn't an obvious label
+  const arabicLines = lines.filter(l =>
+    /[\u0600-\u06FF]/.test(l) &&
+    !/(جمهورية|مصر|العربية|بطاقة|الرقم القومي|تاريخ|العنوان|محافظة)/.test(l)
+  );
+  const name = arabicLines.sort((a, b) => b.length - a.length)[0] || '';
+
+  const govs = ['القاهرة','الجيزة','الإسكندرية','الاسكندرية','الدقهلية','البحيرة','الشرقية','الغربية','المنوفية','القليوبية','بورسعيد','دمياط','الفيوم','بني سويف','المنيا','أسيوط','سوهاج','قنا','أسوان','الأقصر','البحر الأحمر','الوادي الجديد','مطروح','شمال سيناء','جنوب سيناء','كفر الشيخ','السويس','الإسماعيلية'];
+  const gov = govs.find(g => text.includes(g)) || '';
+
+  const addr = arabicLines.find(l => l !== name && l.length > 8) || '';
+
+  document.getElementById('fName').value = name;
+  document.getElementById('fNid').value = nid;
+  document.getElementById('fDob').value = dob;
+  document.getElementById('fGov').value = gov;
+  document.getElementById('fAddr').value = addr;
+}
+</script>
+</body>
+</html>
